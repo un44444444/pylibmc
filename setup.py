@@ -73,7 +73,7 @@ cflags = ["-fno-strict-aliasing", ]
 
 ## Extension definitions
 
-pylibmc_ext = Extension("_pylibmc", ["src/_pylibmcmodule.c"],
+pylibmc_ext = Extension("_pylibmc", ["src/_pylibmcmodule.c","src/fastlz.c"],
                         libraries=libs, include_dirs=incdirs,
                         library_dirs=libdirs, define_macros=defs,
                         extra_compile_args=cflags)

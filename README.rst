@@ -1,3 +1,6 @@
+add pylibmc.Client.get_as_php(key) to share session write by PHP
+====================
+
 `pylibmc` is a Python client for `memcached <http://memcached.org/>`_ written in C.
 
 See `the documentation at sendapatch.se/projects/pylibmc/`__ for more information.
@@ -44,7 +47,3 @@ Contact
 - Github: `github.com/lericson <http://github.com/lericson>`_
 - IRC: ``lericson`` in ``#sendapatch`` on ``chat.freenode.net``
 - E-mail: ``ludvig`` at ``sendapatch.se``
-
-.. image:: http://www.smbc-comics.com/comics/20110908.gif
-   :target: http://www.smbc-comics.com/index.php?db=comics&id=2362
-   :align: center

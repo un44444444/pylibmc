@@ -276,6 +276,7 @@ static PylibMC_Client *PylibMC_ClientType_new(PyTypeObject *, PyObject *,
 static void PylibMC_ClientType_dealloc(PylibMC_Client *);
 static int PylibMC_Client_init(PylibMC_Client *, PyObject *, PyObject *);
 static PyObject *PylibMC_Client_get(PylibMC_Client *, PyObject *arg);
+static PyObject *PylibMC_Client_get_as_php(PylibMC_Client *, PyObject *arg);
 static PyObject *PylibMC_Client_gets(PylibMC_Client *, PyObject *arg);
 static PyObject *PylibMC_Client_set(PylibMC_Client *, PyObject *, PyObject *);
 static PyObject *PylibMC_Client_replace(PylibMC_Client *, PyObject *, PyObject *);
@@ -336,6 +337,8 @@ static bool _PylibMC_IncrDecr(PylibMC_Client *, pylibmc_incr *, size_t);
 static PyMethodDef PylibMC_ClientType_methods[] = {
     {"get", (PyCFunction)PylibMC_Client_get, METH_O,
         "Retrieve a key from a memcached."},
+    {"get_as_php", (PyCFunction)PylibMC_Client_get_as_php, METH_O,
+        "Retrieve a key from a memcached, as php do."},
     {"gets", (PyCFunction)PylibMC_Client_gets, METH_O,
         "Retrieve a key and cas_id from a memcached."},
     {"set", (PyCFunction)PylibMC_Client_set, METH_VARARGS|METH_KEYWORDS,

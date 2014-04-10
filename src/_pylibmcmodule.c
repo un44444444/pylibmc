@@ -32,13 +32,14 @@
  */
 
 #include "_pylibmcmodule.h"
-#ifdef USE_ZLIB
+/* #ifdef USE_ZLIB */
 #  include <zlib.h>
 #  define ZLIB_BUFSZ (1 << 14)
 /* only release the GIL during inflate if the size of the data
    is greater than this (deflate always releases at present) */
 #  define ZLIB_GIL_RELEASE ZLIB_BUFSZ
-#endif
+/* #endif */
+#include "fastlz.h"
 
 #define PyBool_TEST(t) ((t) ? Py_True : Py_False)
 
@@ -503,6 +504,147 @@ cleanup:
     return retval;
 }
 
+#define MEMC_VAL_TYPE_MASK     0xf
+#define MEMC_VAL_IS_STRING     0
+#define MEMC_VAL_IS_LONG       1
+#define MEMC_VAL_IS_DOUBLE     2
+#define MEMC_VAL_IS_BOOL       3
+#define MEMC_VAL_IS_SERIALIZED 4
+#define MEMC_VAL_IS_IGBINARY   5
+#define MEMC_VAL_IS_JSON       6
+#define MEMC_VAL_COMPRESSED    (1<<4)
+#define MEMC_VAL_COMPRESSION_ZLIB    (1<<5)
+#define MEMC_VAL_COMPRESSION_FASTLZ  (1<<6)
+static PyObject *_PylibMC_parse_memcached_value_as_php(char *value, size_t size,
+        uint32_t flags) {
+    PyObject *retval = NULL;
+    PyObject *tmp = NULL;
+    uint32_t dtype = flags & MEMC_VAL_TYPE_MASK;
+
+    PyObject *inflated = NULL;
+    if (flags & MEMC_VAL_COMPRESSED) {
+  
+        /* Decompress value if necessary. */
+        if (flags & MEMC_VAL_COMPRESSION_FASTLZ) {
+            unsigned char *output = NULL;
+            uint32_t output_len = 0;
+            unsigned int osize = 0;
+    
+            memcpy(&output_len, value, sizeof(uint32_t));
+            output = (unsigned char *)malloc(sizeof(unsigned char)*(output_len+1));
+            if (output == NULL) {
+                PyErr_Format(PylibMCExc_MemcachedError,
+                             "Can not malloc output_len+1=%d", output_len+1);
+                return NULL;
+            }
+            size -= sizeof(uint32_t);
+            value += sizeof(uint32_t);
+    
+            osize = fastlz_decompress(value, size, output, output_len);
+            if (osize == 0) {
+                PyErr_Format(PylibMCExc_MemcachedError,
+                             "Fail fastlz_decompress(size=%d,output_len=%d) return osize=%d", size,output_len,osize);
+                return NULL;
+            }
+            else if (osize != output_len) {
+                PyErr_Format(PylibMCExc_MemcachedError,
+                             "Fail fastlz_decompress(size=%d,output_len=%d) return osize=%d", size,output_len,osize);
+                return NULL;
+            }
+            output[output_len] = '\0';
+    
+            inflated = Py_BuildValue("s#", output, osize);
+    
+            free(output);
+    
+            if(inflated == NULL) {
+                return NULL;
+            }
+    
+            value = PyString_AS_STRING(inflated);
+            size = PyString_GET_SIZE(inflated);
+        }
+        else if (flags & MEMC_VAL_COMPRESSION_ZLIB) {
+            int rc;
+            char* inflated_buf = NULL;
+            size_t inflated_size = 0;
+            char* failure_reason = NULL;
+    
+            if(size >= ZLIB_GIL_RELEASE) {
+                Py_BEGIN_ALLOW_THREADS;
+                rc = _PylibMC_Inflate(value, size,
+                                      &inflated_buf, &inflated_size,
+                                      &failure_reason);
+                Py_END_ALLOW_THREADS;
+            } else {
+                rc = _PylibMC_Inflate(value, size,
+                                      &inflated_buf, &inflated_size,
+                                      &failure_reason);
+            }
+    
+            if(rc != Z_OK) {
+                /* set up the exception */
+                if(failure_reason == NULL) {
+                    PyErr_Format(PylibMCExc_MemcachedError,
+                                 "Failed to decompress value: %d", rc);
+                } else {
+                    PyErr_Format(PylibMCExc_MemcachedError,
+                                 "Failed to decompress value: %s", failure_reason);
+                }
+                return NULL;
+            }
+    
+            inflated = Py_BuildValue("s#", inflated_buf, inflated_size);
+    
+            free(inflated_buf);
+    
+            if(inflated == NULL) {
+                return NULL;
+            }
+    
+            value = PyString_AS_STRING(inflated);
+            size = PyString_GET_SIZE(inflated);
+        }
+        else {
+            PyErr_SetString(PylibMCExc_MemcachedError,
+                "value for key compressed, do not know how to uncompress");
+            return NULL;
+        }
+    }
+
+    switch (dtype) {
+        case MEMC_VAL_IS_LONG:
+        case MEMC_VAL_IS_DOUBLE:
+        case MEMC_VAL_IS_BOOL:
+            /* PyInt_FromString doesn't take a length param and we're
+               not NULL-terminated, so we'll have to make an
+               intermediate Python string out of it */
+            tmp = PyString_FromStringAndSize(value, size);
+            if(tmp == NULL) {
+              goto cleanup;
+            }
+            retval = PyInt_FromString(PyString_AS_STRING(tmp), NULL, 10);
+            if(retval != NULL && dtype == MEMC_VAL_IS_BOOL) {
+              Py_DECREF(tmp);
+              tmp = retval;
+              retval = PyBool_FromLong(PyInt_AS_LONG(tmp));
+            }
+            break;
+        case MEMC_VAL_IS_STRING:
+            retval = PyString_FromStringAndSize(value, (Py_ssize_t)size);
+            break;
+        default:
+            PyErr_Format(PylibMCExc_MemcachedError,
+                    "unknown memcached key flags %u", flags);
+    }
+
+cleanup:
+    Py_XDECREF(inflated);
+    Py_XDECREF(tmp);
+
+    return retval;
+}
+
 static PyObject *_PylibMC_parse_memcached_result(memcached_result_st *res) {
         return _PylibMC_parse_memcached_value((char *)memcached_result_value(res),
                                               memcached_result_length(res),
@@ -530,6 +672,43 @@ static PyObject *PylibMC_Client_get(PylibMC_Client *self, PyObject *arg) {
 
     if (mc_val != NULL) {
         PyObject *r = _PylibMC_parse_memcached_value(mc_val, val_size, flags);
+        free(mc_val);
+        return r;
+    } else if (error == MEMCACHED_SUCCESS) {
+        /* This happens for empty values, and so we fake an empty string. */
+        return PyString_FromStringAndSize("", 0);
+    } else if (error == MEMCACHED_NOTFOUND) {
+        /* Since python-memcache returns None when the key doesn't exist,
+         * so shall we. */
+        Py_RETURN_NONE;
+    }
+
+    return PylibMC_ErrFromMemcachedWithKey(self, "memcached_get", error,
+                                           PyString_AS_STRING(arg),
+                                           PyString_GET_SIZE(arg));
+}
+
+static PyObject *PylibMC_Client_get_as_php(PylibMC_Client *self, PyObject *arg) {
+    char *mc_val;
+    size_t val_size;
+    uint32_t flags;
+    memcached_return error;
+
+    if (!_PylibMC_CheckKey(arg)) {
+        return NULL;
+    } else if (!PySequence_Length(arg) ) {
+        /* Others do this, so... */
+        Py_RETURN_NONE;
+    }
+
+    Py_BEGIN_ALLOW_THREADS;
+    mc_val = memcached_get(self->mc,
+            PyString_AS_STRING(arg), PyString_GET_SIZE(arg),
+            &val_size, &flags, &error);
+    Py_END_ALLOW_THREADS;
+
+    if (mc_val != NULL) {
+        PyObject *r = _PylibMC_parse_memcached_value_as_php(mc_val, val_size, flags);
         free(mc_val);
         return r;
     } else if (error == MEMCACHED_SUCCESS) {
