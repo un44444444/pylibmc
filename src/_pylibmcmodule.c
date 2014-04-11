@@ -570,6 +570,11 @@ static PyObject *_PylibMC_parse_memcached_value_as_php(char *value, size_t size,
             size_t inflated_size = 0;
             char* failure_reason = NULL;
     
+            uint32_t expected_size = 0;
+            memcpy(&expected_size, value, sizeof(uint32_t));
+            size -= sizeof(uint32_t);
+            value += sizeof(uint32_t);
+    
             if(size >= ZLIB_GIL_RELEASE) {
                 Py_BEGIN_ALLOW_THREADS;
                 rc = _PylibMC_Inflate(value, size,
@@ -591,6 +596,11 @@ static PyObject *_PylibMC_parse_memcached_value_as_php(char *value, size_t size,
                     PyErr_Format(PylibMCExc_MemcachedError,
                                  "Failed to decompress value: %s", failure_reason);
                 }
+                return NULL;
+            }
+            else if(expected_size != inflated_size) {
+                PyErr_Format(PylibMCExc_MemcachedError,
+                             "Fail decompress(size=%d) return inflated_size=%d, but expected_size=%d", size,inflated_size,expected_size);
                 return NULL;
             }
     
